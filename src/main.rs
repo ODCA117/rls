@@ -43,8 +43,8 @@ fn main() {
         .collect();
 
     match args.list {
-        true => list(&dir_entry),
-        false => list_info(&dir_entry),
+        false => list(&dir_entry),
+        true => list_info(&dir_entry),
     }
 }
 
@@ -56,9 +56,10 @@ fn list(entries: &Vec<DirEntry>) {
             .expect("failed to read file name")
             .to_str()
         {
-            println!("{name}");
+            print!("{name}\t");
         }
     }
+    println!();
 }
 
 fn list_info(entries: &Vec<DirEntry>) {
@@ -69,7 +70,7 @@ fn list_info(entries: &Vec<DirEntry>) {
             .expect("failed to read file name")
             .to_str()
         {
-            print!("{name}\t");
+            println!("{name}");
         }
     }
 }
