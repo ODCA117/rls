@@ -14,13 +14,16 @@ struct LsArgs {
     /// List files
     #[arg(short, long)]
     list: bool,
+
+    /// List all files
+    #[arg(short, long)]
+    all: bool,
 }
 
 fn main() {
     env_logger::init();
     let args = LsArgs::parse();
     trace!("Starting rsls");
-    trace!("list: {}", args.list);
 
     // current dir or sub dir
     let path_buf = match args.name {
@@ -36,11 +39,31 @@ fn main() {
         error!("Not a directory");
     }
 
-    let dir_entry = path_buf
-        .read_dir()
-        .expect("Failed to read directory")
-        .filter_map(|e| e.ok())
-        .collect();
+    /* Get all directory entires */
+    let read_dir = path_buf.read_dir().expect("Failed to read directory");
+
+    /* Filter out hidden files if not all argument */
+    let dir_entry = match args.all {
+        false => read_dir
+            .filter_map(|res_entry| {
+                res_entry.ok().and_then(|entry| {
+                    match entry
+                        .file_name()
+                        .to_str()
+                        .map(|s| s.starts_with(".")).unwrap()
+                    {
+                        true => {
+                                None
+                            },
+                        false => {
+                                Some(entry)
+                            }
+                    }
+                })
+            })
+            .collect(),
+        true => read_dir.filter_map(|e| e.ok()).collect(),
+    };
 
     match args.list {
         false => list(&dir_entry),
