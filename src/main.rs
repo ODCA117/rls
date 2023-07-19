@@ -1,11 +1,9 @@
 use std::env;
-use std::path::PathBuf;
 use std::fs::DirEntry;
+use std::path::PathBuf;
 
 use clap::Parser;
-use env_logger;
-use log::{trace, warn, error, log_enabled, Level};
-
+use log::{error, trace};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -29,15 +27,19 @@ fn main() {
         Some(name) => PathBuf::from(name),
         None => env::current_dir().expect("Failed to read current dir"),
     };
-    trace!("list dir: {:?}", path_buf.file_name().expect("Could not name"));
+    trace!(
+        "list dir: {:?}",
+        path_buf.file_name().expect("Could not name")
+    );
 
     if !path_buf.is_dir() {
         error!("Not a directory");
     }
 
-    let dir_entry = path_buf.read_dir()
+    let dir_entry = path_buf
+        .read_dir()
         .expect("Failed to read directory")
-        .filter_map(|e| e.ok() )
+        .filter_map(|e| e.ok())
         .collect();
 
     match args.list {
@@ -46,25 +48,28 @@ fn main() {
     }
 }
 
-fn list (entries: &Vec<DirEntry>) {
-    for e in entries.into_iter() {
-        if let Some(name) = e.path()
+fn list(entries: &Vec<DirEntry>) {
+    for e in entries.iter() {
+        if let Some(name) = e
+            .path()
             .file_name()
             .expect("failed to read file name")
-            .to_str() {
+            .to_str()
+        {
             println!("{name}");
         }
     }
 }
 
 fn list_info(entries: &Vec<DirEntry>) {
-    for e in entries.into_iter() {
-        if let Some(name) = e.path()
+    for e in entries.iter() {
+        if let Some(name) = e
+            .path()
             .file_name()
             .expect("failed to read file name")
-            .to_str() {
+            .to_str()
+        {
             print!("{name}\t");
         }
     }
 }
-
