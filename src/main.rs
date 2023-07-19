@@ -53,6 +53,7 @@ fn main() {
                         .map(|s| s.starts_with(".")).unwrap()
                     {
                         true => {
+                                trace!("Filter hidden file{:?}", entry.file_name());
                                 None
                             },
                         false => {
