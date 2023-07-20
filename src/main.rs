@@ -1,5 +1,6 @@
 use std::env;
 use std::fs::DirEntry;
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -50,15 +51,14 @@ fn main() {
                     match entry
                         .file_name()
                         .to_str()
-                        .map(|s| s.starts_with(".")).unwrap()
+                        .map(|s| s.starts_with("."))
+                        .unwrap()
                     {
                         true => {
-                                trace!("Filter hidden file{:?}", entry.file_name());
-                                None
-                            },
-                        false => {
-                                Some(entry)
-                            }
+                            trace!("Filter hidden file{:?}", entry.file_name());
+                            None
+                        }
+                        false => Some(entry),
                     }
                 })
             })
@@ -87,14 +87,35 @@ fn list(entries: &Vec<DirEntry>) {
 }
 
 fn list_info(entries: &Vec<DirEntry>) {
+    println!("Mode\t\t user\t group\t size\t name");
     for e in entries.iter() {
-        if let Some(name) = e
-            .path()
-            .file_name()
-            .expect("failed to read file name")
-            .to_str()
-        {
-            println!("{name}");
+        if let Ok(metadata) = e.metadata() {
+            // TODO: Change this
+            if let Some(name) = e.path().file_name() {
+                let name = name.to_str().expect("OS String failed to be converted");
+                let d = if metadata.is_dir() { "d" } else { "-" };
+                let size = metadata.size();
+                let mode = metadata.mode();
+                let usr = metadata.uid(); // TODO: Convert to text
+                let grp = metadata.gid(); // TODO: Convert to text
+
+                let ue = if mode & 0o100 > 0 { "x" } else { "-" };
+                let ur = if mode & 0o200 > 0 { "r" } else { "-" };
+                let uw = if mode & 0o400 > 0 { "w" } else { "-" };
+
+                let ge = if mode & 0o010 > 0 { "x" } else { "-" };
+                let gr = if mode & 0o020 > 0 { "r" } else { "-" };
+                let gw = if mode & 0o040 > 0 { "w" } else { "-" };
+
+                let ae = if mode & 0o001 > 0 { "x" } else { "-" };
+                let ar = if mode & 0o002 > 0 { "r" } else { "-" };
+                let aw = if mode & 0o004 > 0 { "w" } else { "-" };
+
+                println!(
+                    "{d}{ur}{uw}{ue}{gr}{gw}{ge}{ar}{aw}{ae}\t {:?}\t {:?}\t {:?}\t {}",
+                    usr, grp, size, name
+                );
+            }
         }
     }
 }
