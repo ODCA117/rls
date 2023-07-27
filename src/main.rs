@@ -1,7 +1,7 @@
 use clap::Parser;
 use log::{error, trace};
 use std::env;
-use std::fs::DirEntry;
+use std::fs::{DirEntry, ReadDir};
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use users::{Users, UsersCache};
@@ -52,10 +52,13 @@ fn main() {
     let read_dir = path_buf.read_dir().expect("Failed to read directory");
 
     /* Filter out hidden files if not all argument */
-    let dir_entry = match args.all {
+    let mut dir_entry = match args.all {
         false => filter_hidden(read_dir),
         true => read_dir.filter_map(|e| e.ok()).collect(),
     };
+
+    /* Sort DirEntry list */
+    dir_entry.sort_by_key(|dir| dir.file_name());
 
     match args.list {
         false => list(&dir_entry),
