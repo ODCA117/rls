@@ -53,24 +53,7 @@ fn main() {
 
     /* Filter out hidden files if not all argument */
     let dir_entry = match args.all {
-        false => read_dir
-            .filter_map(|res_entry| {
-                res_entry.ok().and_then(|entry| {
-                    match entry
-                        .file_name()
-                        .to_str()
-                        .map(|s| s.starts_with("."))
-                        .unwrap()
-                    {
-                        true => {
-                            trace!("Filter hidden file{:?}", entry.file_name());
-                            None
-                        }
-                        false => Some(entry),
-                    }
-                })
-            })
-            .collect(),
+        false => filter_hidden(read_dir),
         true => read_dir.filter_map(|e| e.ok()).collect(),
     };
 
@@ -78,6 +61,29 @@ fn main() {
         false => list(&dir_entry),
         true => list_info(&dir_entry),
     }
+}
+
+fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
+    /* For each DirEntry, if the name starts with "."
+    * return None, else return the entry and collect to a Vec<DirEntry> */
+    read_dir
+        .filter_map(|res_entry| {
+            res_entry.ok().and_then(|entry| {
+                match entry
+                    .file_name()
+                    .to_str()
+                    .map(|s| s.starts_with("."))
+                    .unwrap()
+                {
+                    true => {
+                        trace!("Filter hidden file{:?}", entry.file_name());
+                        None
+                    }
+                    false => Some(entry),
+                }
+            })
+        })
+        .collect()
 }
 
 fn list(entries: &Vec<DirEntry>) {
