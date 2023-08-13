@@ -35,7 +35,7 @@ fn main() {
     trace!("Starting rsls");
 
     // current dir or sub dir
-    let path_buf = match args.name {
+    let path_buf = match &args.name {
         Some(name) => PathBuf::from(name),
         None => env::current_dir().expect("Failed to read current dir"),
     };
@@ -46,8 +46,17 @@ fn main() {
 
     if !path_buf.is_dir() {
         error!("Not a directory");
+        std::process::exit(1);
     }
+    let dir_entry = read_dir(path_buf, &args);
 
+    match args.list {
+        false => list(&dir_entry),
+        true => list_info(&dir_entry),
+    }
+}
+
+fn read_dir(path_buf: PathBuf, args: &LsArgs) -> Vec<DirEntry>{
     /* Get all directory entires */
     let read_dir = path_buf.read_dir().expect("Failed to read directory");
 
@@ -59,11 +68,7 @@ fn main() {
 
     /* Sort DirEntry list */
     dir_entry.sort_by_key(|dir| dir.file_name());
-
-    match args.list {
-        false => list(&dir_entry),
-        true => list_info(&dir_entry),
-    }
+    dir_entry
 }
 
 fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
