@@ -1,9 +1,9 @@
 use clap::Parser;
 use log::{error, trace};
 use std::env;
-use std::fs::{DirEntry, ReadDir};
-use std::os::unix::fs::MetadataExt;
+use std::fs::{DirEntry, ReadDir, Metadata};
 use std::path::PathBuf;
+use std::os::unix::fs::MetadataExt;
 use users::{Users, UsersCache};
 
 #[derive(Parser, Debug)]
@@ -19,6 +19,25 @@ struct LsArgs {
     /// List all files
     #[arg(short, long)]
     all: bool,
+
+    /// List files recursive
+    #[arg(short, long, default_value_t = 1)]
+    recursive: u8,
+}
+
+struct FSFile {
+    path_buf: PathBuf,
+    metadata: Metadata,
+    entry_type: FSFileType,
+}
+
+enum FSFileType {
+    File,
+    Dir(DirType),
+}
+
+struct DirType {
+    pub childs: Vec<FSFile>,
 }
 
 struct ListParams {
@@ -39,6 +58,7 @@ fn main() {
         Some(name) => PathBuf::from(name),
         None => env::current_dir().expect("Failed to read current dir"),
     };
+
     trace!(
         "list dir: {:?}",
         path_buf.file_name().expect("Could not name")
@@ -48,27 +68,62 @@ fn main() {
         error!("Not a directory");
         std::process::exit(1);
     }
-    let dir_entry = read_dir(path_buf, &args);
 
+    let dir_entry = read_directory(path_buf, args.recursive, &args);
+
+    // TODO: Fix listing based on new type
     match args.list {
         false => list(&dir_entry),
         true => list_info(&dir_entry),
     }
 }
 
-fn read_dir(path_buf: PathBuf, args: &LsArgs) -> Vec<DirEntry>{
-    /* Get all directory entires */
-    let read_dir = path_buf.read_dir().expect("Failed to read directory");
+fn read_directory(path: PathBuf, depth: u8, args: &LsArgs) -> FSFile {
+    /* TODO: Verify it is a dir */
+
+    trace!("Read dir: {:?}", path);
+
+    let mut dir_type = DirType {childs: Vec::new()};
+
+    if depth <= 0 {
+        /* Do not read dir, just return the FSObject */
+        return FSFile {path_buf: path.clone(), metadata: path.metadata().unwrap(), entry_type: FSFileType::Dir(dir_type)};
+    }
+
+    /* Get all directory entires
+    * TODO: Fix error handling */
+    let read_dir = path.read_dir().expect("Failed to read directory");
 
     /* Filter out hidden files if not all argument */
-    let mut dir_entry = match args.all {
+    let dir_entry = match args.all {
         false => filter_hidden(read_dir),
         true => read_dir.filter_map(|e| e.ok()).collect(),
     };
 
-    /* Sort DirEntry list */
-    dir_entry.sort_by_key(|dir| dir.file_name());
-    dir_entry
+    for d in dir_entry {
+        /* Fix error handling */
+        let metadata = d.metadata().expect("Could not fetch metadata");
+
+        if metadata.is_dir() {
+            /* Recursivley read directory */
+            let sub_dir = read_directory(d.path(), depth - 1, &args);
+            /* Store read directory in current directory */
+            dir_type.childs.push(sub_dir);
+        }
+        else if metadata.is_file() {
+            /* Store the file */
+            let fs_file = FSFile {path_buf: d.path(), metadata, entry_type: FSFileType::File};
+            dir_type.childs.push(fs_file);
+        }
+        else if metadata.is_symlink() {
+            /* Store the symlink */
+            trace!("Symlink, should display it in better color");
+        }
+    }
+
+    /* Sort childs */
+    dir_type.childs.sort_by_key(|fs_file| fs_file.path_buf.clone());
+    return FSFile {path_buf: path.clone(), metadata: path.metadata().unwrap(), entry_type: FSFileType::Dir(dir_type)};
 }
 
 fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
@@ -94,39 +149,56 @@ fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
         .collect()
 }
 
-fn list(entries: &Vec<DirEntry>) {
-    for e in entries.iter() {
-        if let Some(name) = e
-            .path()
-            .file_name()
-            .expect("failed to read file name")
-            .to_str()
-        {
-            print!("{name}\t");
-        }
+fn list(fs_file: &FSFile) {
+    match &fs_file.entry_type {
+        FSFileType::Dir(dir_type) => {
+            for child in dir_type.childs.iter() {
+                print!("{}\t", child.path_buf.file_name().unwrap().to_str().unwrap());
+                match &child.entry_type {
+                    FSFileType::File => continue,
+                    FSFileType::Dir(_) => {
+                        list(child);
+                    },
+                }
+            }
+        },
+        FSFileType::File => {
+            error!("Cannot list file");
+        },
     }
     println!();
 }
 
-fn list_info(entries: &Vec<DirEntry>) {
+fn list_info(fs_file: &FSFile) {
     println!("Mode\t\t user\t group\t size\t name");
-    for e in entries.iter() {
-        let list_params = parse_dir_entry(&e).unwrap();
-
-        println!(
-            "{}\t {}\t {}\t {:?}\t {}",
-            list_params.modes, list_params.usr, list_params.grp, list_params.size, list_params.name
-        );
+    match &fs_file.entry_type {
+        FSFileType::Dir(dir) => {
+            for child in dir.childs.iter() {
+                let list_params = parse_dir_entry(child).unwrap();
+                println!(
+                    "{}\t {}\t {}\t {:?}\t {}",
+                    list_params.modes, list_params.usr, list_params.grp, list_params.size, list_params.name
+                );
+                match &child.entry_type {
+                    FSFileType::File => continue,
+                    FSFileType::Dir(_) => {
+                        list_info(child);
+                    },
+                }
+            }
+        },
+        FSFileType::File => {
+            error!("Cannot list file");
+        },
     }
 }
 
-fn parse_dir_entry(e: &DirEntry) -> Result<ListParams, String> {
-    let metadata = e.metadata().map_err(|_| String::from("Metadata"))?;
+fn parse_dir_entry(fs_file: &FSFile) -> Result<ListParams, String> {
+
+    let metadata = fs_file.metadata.clone();
 
     /* Get name of file */
-    let path = e.path();
-    let name = path.file_name().ok_or("name")?;
-    let name = name.to_str().ok_or("Name")?;
+    let name = fs_file.path_buf.file_name().unwrap().to_str().unwrap();
 
     /* Get permission of file */
     let d = if metadata.is_dir() { "d" } else { "-" };
