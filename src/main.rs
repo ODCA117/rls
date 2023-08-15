@@ -1,5 +1,5 @@
 use clap::Parser;
-use log::{error, trace};
+use log::{error, warn, trace};
 use std::env;
 use std::fs::{DirEntry, ReadDir, Metadata};
 use std::path::PathBuf;
@@ -26,6 +26,7 @@ struct LsArgs {
 }
 
 struct FSFile {
+    name: String,
     path_buf: PathBuf,
     metadata: Metadata,
     entry_type: FSFileType,
@@ -61,7 +62,7 @@ fn main() {
 
     trace!(
         "list dir: {:?}",
-        path_buf.file_name().expect("Could not name")
+        path_buf.file_name().expect("Could not read directory name")
     );
 
     if !path_buf.is_dir() {
@@ -69,7 +70,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let dir_entry = read_directory(path_buf, args.recursive, &args);
+    let dir_entry = read_directory(path_buf, args.recursive, &args).expect("Failed to read dir");
 
     // TODO: Fix listing based on new type
     match args.list {
@@ -78,21 +79,25 @@ fn main() {
     }
 }
 
-fn read_directory(path: PathBuf, depth: u8, args: &LsArgs) -> FSFile {
+fn read_directory(path: PathBuf, depth: u8, args: &LsArgs) -> Result<FSFile, String> {
     /* TODO: Verify it is a dir */
 
     trace!("Read dir: {:?}", path);
 
     let mut dir_type = DirType {childs: Vec::new()};
+    let name = path.file_name()
+        .ok_or(String::from("failed to read file name"))?
+        .to_str()
+        .ok_or(String::from("Failed to read file name"))?;
+    let metadata = path.metadata().map_err(|_|String::from("Failed to open metadata"))?;
 
-    if depth <= 0 {
+    if depth == 0 {
         /* Do not read dir, just return the FSObject */
-        return FSFile {path_buf: path.clone(), metadata: path.metadata().unwrap(), entry_type: FSFileType::Dir(dir_type)};
+        return Ok(FSFile {name: String::from(name), path_buf: path.clone(), metadata, entry_type: FSFileType::Dir(dir_type)});
     }
 
-    /* Get all directory entires
-    * TODO: Fix error handling */
-    let read_dir = path.read_dir().expect("Failed to read directory");
+    /* Get all directory entires */
+    let read_dir = path.read_dir().map_err(|_|String::from("Failed to read dir"))?;
 
     /* Filter out hidden files if not all argument */
     let dir_entry = match args.all {
@@ -101,29 +106,33 @@ fn read_directory(path: PathBuf, depth: u8, args: &LsArgs) -> FSFile {
     };
 
     for d in dir_entry {
-        /* Fix error handling */
-        let metadata = d.metadata().expect("Could not fetch metadata");
-
-        if metadata.is_dir() {
-            /* Recursivley read directory */
-            let sub_dir = read_directory(d.path(), depth - 1, &args);
-            /* Store read directory in current directory */
-            dir_type.childs.push(sub_dir);
-        }
-        else if metadata.is_file() {
-            /* Store the file */
-            let fs_file = FSFile {path_buf: d.path(), metadata, entry_type: FSFileType::File};
-            dir_type.childs.push(fs_file);
-        }
-        else if metadata.is_symlink() {
-            /* Store the symlink */
-            trace!("Symlink, should display it in better color");
+        if let Ok(subdir_metadata) = d.metadata() {
+            if subdir_metadata.is_dir() {
+                /* Recursivley read directory */
+                if let Ok(sub_dir) = read_directory(d.path(), depth - 1, &args) {
+                    /* Store read directory in current directory */
+                    dir_type.childs.push(sub_dir);
+                }
+            }
+            else if subdir_metadata.is_file() {
+                /* Store the file */
+                if let Some(subdir_name) = d.file_name().to_str() {
+                    let fs_file = FSFile {name: String::from(subdir_name), path_buf: d.path(), metadata: subdir_metadata, entry_type: FSFileType::File};
+                    dir_type.childs.push(fs_file);
+                }
+            }
+            else if subdir_metadata.is_symlink() {
+                /* Store the symlink */
+                trace!("Symlink, should display it in better color");
+            }
+        } else {
+            warn!("Failed to open meta data of child dir.");
         }
     }
 
     /* Sort childs */
     dir_type.childs.sort_by_key(|fs_file| fs_file.path_buf.clone());
-    return FSFile {path_buf: path.clone(), metadata: path.metadata().unwrap(), entry_type: FSFileType::Dir(dir_type)};
+    return Ok(FSFile {name: String::from(name), path_buf: path.clone(), metadata, entry_type: FSFileType::Dir(dir_type)});
 }
 
 fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
@@ -136,13 +145,16 @@ fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
                     .file_name()
                     .to_str()
                     .map(|s| s.starts_with("."))
-                    .unwrap()
                 {
-                    true => {
+                    Some(false) => Some(entry),
+                    Some(true) => {
                         trace!("Filter hidden file{:?}", entry.file_name());
                         None
+                    },
+                    None => {
+                        error!("error filtering hidden files");
+                        None
                     }
-                    false => Some(entry),
                 }
             })
         })
@@ -152,8 +164,8 @@ fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
 fn list(fs_file: &FSFile) {
     match &fs_file.entry_type {
         FSFileType::Dir(dir_type) => {
-            for child in dir_type.childs.iter() {
-                print!("{}\t", child.path_buf.file_name().unwrap().to_str().unwrap());
+            for child in dir_type.childs.iter() { // Can fail if the file is currupt, Make sure to
+                print!("{}\t", child.name);
                 match &child.entry_type {
                     FSFileType::File => continue,
                     FSFileType::Dir(_) => {
@@ -197,8 +209,8 @@ fn parse_dir_entry(fs_file: &FSFile) -> Result<ListParams, String> {
 
     let metadata = fs_file.metadata.clone();
 
-    /* Get name of file */
-    let name = fs_file.path_buf.file_name().unwrap().to_str().unwrap();
+    /* Get name of file */ // Can fail due to permissions, symbolic link or path errors.
+    let name = fs_file.name.clone();
 
     /* Get permission of file */
     let d = if metadata.is_dir() { "d" } else { "-" };
