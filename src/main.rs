@@ -2,9 +2,11 @@ use clap::Parser;
 use log::{error, warn, trace};
 use std::env;
 use std::fs::{DirEntry, ReadDir, Metadata};
+use std::io::Write;
 use std::path::PathBuf;
 use std::os::unix::fs::MetadataExt;
 use users::{Users, UsersCache};
+use crossterm::{queue, style, style::Color};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -74,7 +76,7 @@ fn main() {
 
     // TODO: Fix listing based on new type
     match args.list {
-        false => list(&dir_entry),
+        false => list(&dir_entry).expect("Failed to print stuff"),
         true => list_info(&dir_entry),
     }
 }
@@ -161,11 +163,15 @@ fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
         .collect()
 }
 
-fn list(fs_file: &FSFile) {
+fn list(fs_file: &FSFile) -> Result<(), String> {
+
+    let mut stdout = std::io::stdout();
     match &fs_file.entry_type {
         FSFileType::Dir(dir_type) => {
             for child in dir_type.childs.iter() { // Can fail if the file is currupt, Make sure to
-                print!("{}\t", child.name);
+                queue!(
+                    stdout,
+                    style::Print(format!("{}, ", child.name.clone()))).map_err(|_| String::from("Failed to print name"))?;
                 match &child.entry_type {
                     FSFileType::File => continue,
                     FSFileType::Dir(_) => {
@@ -178,7 +184,9 @@ fn list(fs_file: &FSFile) {
             error!("Cannot list file");
         },
     }
-    println!();
+    queue!(stdout, style::Print("\n")).map_err(|_| String::from("Failed to print name"))?;
+    stdout.flush();
+    Ok(())
 }
 
 fn list_info(fs_file: &FSFile) {

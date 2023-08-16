@@ -12,3 +12,4 @@ env_logger = "0.10.0"
 log = { version = "0.4.19", features = ["release_max_level_warn"] }
 thiserror = "1.0"
 users = "0.11.0"
+crossterm = "0.26"
