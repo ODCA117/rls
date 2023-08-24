@@ -1,14 +1,15 @@
 use clap::Parser;
 use log::{error, warn, trace};
+use std::sync::OnceLock;
 use std::env;
 use std::fs::{DirEntry, ReadDir, Metadata};
 use std::io::Write;
 use std::path::PathBuf;
 use std::os::unix::fs::MetadataExt;
 use users::{Users, UsersCache};
-use crossterm::{queue, style, style::Color};
+use crossterm::{queue, style};
 
-#[derive(Parser, Debug)]
+#[derive(Clone, Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct LsArgs {
     /// Directory to list
@@ -22,10 +23,14 @@ struct LsArgs {
     #[arg(short, long)]
     all: bool,
 
-    /// List files recursive
+    /// List files in a tree
     #[arg(short, long, default_value_t = 1)]
-    recursive: u8,
+    tree: u8,
 }
+
+static ARGS: OnceLock<LsArgs> = OnceLock::new();
+static ITEM_SIGN: &str = "|-";
+static LAST_SIGN: &str = "|_";
 
 struct FSFile {
     name: String,
@@ -53,7 +58,8 @@ struct ListParams {
 
 fn main() {
     env_logger::init();
-    let args = LsArgs::parse();
+    let args = ARGS.get_or_init(|| LsArgs::parse());
+
     trace!("Starting rsls");
 
     // current dir or sub dir
@@ -72,13 +78,10 @@ fn main() {
         std::process::exit(1);
     }
 
-    let dir_entry = read_directory(path_buf, args.recursive, &args).expect("Failed to read dir");
+    let dir_entry = read_directory(path_buf, args.tree, &args).expect("Failed to read dir");
 
     // TODO: Fix listing based on new type
-    match args.list {
-        false => list(&dir_entry).expect("Failed to print stuff"),
-        true => list_info(&dir_entry),
-    }
+    list(&dir_entry).expect("Failed to print stuff");
 }
 
 fn read_directory(path: PathBuf, depth: u8, args: &LsArgs) -> Result<FSFile, String> {
@@ -164,56 +167,117 @@ fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
 }
 
 fn list(fs_file: &FSFile) -> Result<(), String> {
-
     let mut stdout = std::io::stdout();
-    match &fs_file.entry_type {
-        FSFileType::Dir(dir_type) => {
-            for child in dir_type.childs.iter() { // Can fail if the file is currupt, Make sure to
-                queue!(
-                    stdout,
-                    style::Print(format!("{}, ", child.name.clone()))).map_err(|_| String::from("Failed to print name"))?;
-                match &child.entry_type {
-                    FSFileType::File => continue,
-                    FSFileType::Dir(_) => {
-                        list(child);
-                    },
-                }
-            }
-        },
-        FSFileType::File => {
-            error!("Cannot list file");
-        },
+    let args = ARGS.get().unwrap();
+    if args.list && args.tree > 1 {
+        warn!("Cannot display list and tree, will do list");
+        println!("Mode\t\t user\t group\t size\t\t name"); // TODO: Convert to print
+        print_dir(&mut stdout, fs_file)?;
+        queue!(stdout, style::Print("\n")).map_err(|_| String::from("Failed to print name"))?;
+        let _ = stdout.flush();
+        return Ok(());
     }
+
+    if args.list {
+        println!("Mode\t\t user\t group\t size\t\t name"); // TODO: Convert to print
+    }
+
+    if args.tree > 1 {
+        print_dir_rec(&mut stdout, fs_file, 0)?;
+    } else {
+        print_dir(&mut stdout, fs_file)?;
+    }
+
     queue!(stdout, style::Print("\n")).map_err(|_| String::from("Failed to print name"))?;
-    stdout.flush();
+    let _ = stdout.flush();
     Ok(())
 }
 
-fn list_info(fs_file: &FSFile) {
-    println!("Mode\t\t user\t group\t size\t name");
+/// Prints a single directory
+fn print_dir<W>(w: &mut W, fs_file: &FSFile) -> Result<(), String>
+where
+    W: std::io::Write,
+{
+    let args = ARGS.get().unwrap();
     match &fs_file.entry_type {
-        FSFileType::Dir(dir) => {
-            for child in dir.childs.iter() {
-                let list_params = parse_dir_entry(child).unwrap();
-                println!(
-                    "{}\t {}\t {}\t {:?}\t {}",
-                    list_params.modes, list_params.usr, list_params.grp, list_params.size, list_params.name
-                );
-                match &child.entry_type {
-                    FSFileType::File => continue,
-                    FSFileType::Dir(_) => {
-                        list_info(child);
-                    },
-                }
+        FSFileType::Dir(dir_type) => {
+            for child in dir_type.childs.iter() {
+                let output_string = if args.list {
+                    parse_dir_entry(child)?
+                } else {
+                    let mut n = String::with_capacity(64);
+                    n.push_str(child.name.as_str());
+                    n.push_str("\t");
+                    n
+                };
+                queue!(
+                    w,
+                    style::Print(format!("{}", output_string))).map_err(|_| String::from("Failed to print name"))?;
             }
         },
         FSFileType::File => {
             error!("Cannot list file");
         },
     }
+    Ok(())
 }
 
-fn parse_dir_entry(fs_file: &FSFile) -> Result<ListParams, String> {
+/// NOTE! Incompatible with -l command due to visualization problems
+fn print_dir_rec<W>(w: &mut W, fs_file: &FSFile, depth: u8) -> Result<(), String>
+where
+    W: std::io::Write,
+{
+    let args = ARGS.get().ok_or("Failet to get settings")?;
+    if args.tree <= depth {
+        return Ok(());
+    }
+    let indent = (0..depth).map(|_| "|  ").collect::<String>();
+    match &fs_file.entry_type {
+        FSFileType::Dir(dir_type) => {
+            let mut it = dir_type.childs.iter().peekable();
+            while let Some(child) = it.next() {
+                let last = match it.peek() {
+                    None => true,
+                    _ => false,
+                };
+                match &child.entry_type {
+                    FSFileType::File => {
+                        // TODO: refactor to its own function
+                        let mut prefix = indent.clone();
+                        if last {
+                            prefix.push_str(LAST_SIGN);
+                        } else {
+                            prefix.push_str(ITEM_SIGN);
+                        };
+                        
+                        queue!(
+                            w,
+                            style::Print(format!("{}{}\n", prefix.clone(), child.name.clone()))).map_err(|_| String::from("Failed to print name"))?;
+                    },
+                    FSFileType::Dir(c) => {
+                        // TODO: refactor to its own function
+                        let mut prefix = indent.clone();
+                        if last && c.childs.len() == 0 {
+                            prefix.push_str(LAST_SIGN);
+                        } else {
+                            prefix.push_str(ITEM_SIGN);
+                        };
+                        queue!(
+                            w,
+                            style::Print(format!("{}{}\n", prefix.clone(), child.name.clone()))).map_err(|_| String::from("Failed to print name"))?;
+                        let _ = print_dir_rec(w, child, depth + 1);
+                    },
+                }
+            }
+        },
+        _ => {
+            error!("Cannot list non dir type");
+        },
+    }
+    Ok(())
+}
+
+fn parse_dir_entry(fs_file: &FSFile) -> Result<String, String> {
 
     let metadata = fs_file.metadata.clone();
 
@@ -237,7 +301,7 @@ fn parse_dir_entry(fs_file: &FSFile) -> Result<ListParams, String> {
     let ar = if mode & 0o002 > 0 { "r" } else { "-" };
     let aw = if mode & 0o004 > 0 { "w" } else { "-" };
 
-    let mut modes = String::new();
+    let mut modes = String::with_capacity(64);
     modes.push_str(d);
     modes.push_str(ue);
     modes.push_str(ur);
@@ -265,13 +329,17 @@ fn parse_dir_entry(fs_file: &FSFile) -> Result<ListParams, String> {
     /* Get size of file */
     let size = metadata.size();
 
-    let list_params = ListParams {
-        modes,
-        usr: String::from(usr),
-        grp: String::from(grp),
-        size,
-        name: String::from(name),
-    };
+    modes.push_str("\t");
+    modes.push_str(usr);
+    modes.push_str("\t");
+    modes.push_str(grp);
+    modes.push_str("\t");
+    modes.push_str(size.to_string().as_str());
+    modes.push_str("\t");
+    modes.push_str("\t");
+    modes.push_str(name.as_str());
+    modes.push_str("\n");
 
-    Ok(list_params)
+    Ok(modes)
 }
+
