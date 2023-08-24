@@ -48,17 +48,9 @@ struct DirType {
     pub childs: Vec<FSFile>,
 }
 
-struct ListParams {
-    modes: String,
-    usr: String,
-    grp: String,
-    size: u64,
-    name: String,
-}
-
 fn main() {
     env_logger::init();
-    let args = ARGS.get_or_init(|| LsArgs::parse());
+    let args = ARGS.get_or_init(LsArgs::parse);
 
     trace!("Starting rsls");
 
@@ -78,17 +70,17 @@ fn main() {
         std::process::exit(1);
     }
 
-    let dir_entry = read_directory(path_buf, args.tree, &args).expect("Failed to read dir");
+    let dir_entry = read_directory(path_buf, args.tree).expect("Failed to read dir");
 
     // TODO: Fix listing based on new type
     list(&dir_entry).expect("Failed to print stuff");
 }
 
-fn read_directory(path: PathBuf, depth: u8, args: &LsArgs) -> Result<FSFile, String> {
+fn read_directory(path: PathBuf, depth: u8) -> Result<FSFile, String> {
     /* TODO: Verify it is a dir */
-
     trace!("Read dir: {:?}", path);
 
+    let args = ARGS.get().ok_or("Failed to read settings")?;
     let mut dir_type = DirType { childs: Vec::new() };
     let name = path
         .file_name()
@@ -124,7 +116,7 @@ fn read_directory(path: PathBuf, depth: u8, args: &LsArgs) -> Result<FSFile, Str
         if let Ok(subdir_metadata) = d.metadata() {
             if subdir_metadata.is_dir() {
                 /* Recursivley read directory */
-                if let Ok(sub_dir) = read_directory(d.path(), depth - 1, &args) {
+                if let Ok(sub_dir) = read_directory(d.path(), depth - 1) {
                     /* Store read directory in current directory */
                     dir_type.childs.push(sub_dir);
                 }
@@ -152,12 +144,12 @@ fn read_directory(path: PathBuf, depth: u8, args: &LsArgs) -> Result<FSFile, Str
     dir_type
         .childs
         .sort_by_key(|fs_file| fs_file.path_buf.clone());
-    return Ok(FSFile {
+    Ok(FSFile {
         name: String::from(name),
         path_buf: path.clone(),
         metadata,
         entry_type: FSFileType::Dir(dir_type),
-    });
+    })
 }
 
 fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
@@ -166,7 +158,7 @@ fn filter_hidden(read_dir: ReadDir) -> Vec<DirEntry> {
     read_dir
         .filter_map(|res_entry| {
             res_entry.ok().and_then(|entry| {
-                match entry.file_name().to_str().map(|s| s.starts_with(".")) {
+                match entry.file_name().to_str().map(|s| s.starts_with('.')) {
                     Some(false) => Some(entry),
                     Some(true) => {
                         trace!("Filter hidden file{:?}", entry.file_name());
@@ -223,10 +215,10 @@ where
                 } else {
                     let mut n = String::with_capacity(64);
                     n.push_str(child.name.as_str());
-                    n.push_str("\t");
+                    n.push('\t');
                     n
                 };
-                queue!(w, style::Print(format!("{}", output_string)))
+                queue!(w, style::Print(output_string.to_string()))
                     .map_err(|_| String::from("Failed to print name"))?;
             }
         }
@@ -251,10 +243,7 @@ where
         FSFileType::Dir(dir_type) => {
             let mut it = dir_type.childs.iter().peekable();
             while let Some(child) = it.next() {
-                let last = match it.peek() {
-                    None => true,
-                    _ => false,
-                };
+                let last = it.peek().is_none();
                 match &child.entry_type {
                     FSFileType::File => {
                         // TODO: refactor to its own function
@@ -274,7 +263,7 @@ where
                     FSFileType::Dir(c) => {
                         // TODO: refactor to its own function
                         let mut prefix = indent.clone();
-                        if last && c.childs.len() == 0 {
+                        if last && c.childs.is_empty() {
                             prefix.push_str(LAST_SIGN);
                         } else {
                             prefix.push_str(ITEM_SIGN);
@@ -348,16 +337,16 @@ fn parse_dir_entry(fs_file: &FSFile) -> Result<String, String> {
     /* Get size of file */
     let size = metadata.size();
 
-    modes.push_str("\t");
+    modes.push('\t');
     modes.push_str(usr);
-    modes.push_str("\t");
+    modes.push('\t');
     modes.push_str(grp);
-    modes.push_str("\t");
+    modes.push('\t');
     modes.push_str(size.to_string().as_str());
-    modes.push_str("\t");
-    modes.push_str("\t");
+    modes.push('\t');
+    modes.push('\t');
     modes.push_str(name.as_str());
-    modes.push_str("\n");
+    modes.push('\n');
 
     Ok(modes)
 }
